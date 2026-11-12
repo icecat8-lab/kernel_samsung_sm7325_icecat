@@ -1,0 +1,86 @@
+name: Build Kernel 
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]  
+  workflow_dispatch: 
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    
+    steps:
+      - name: 📥 Checkout Kernel Source
+        uses: actions/checkout@v4
+      
+      - name: 🛠️ Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential ccache curl flex g++-multilib \
+            gcc-multilib git gnupg gperf imagemagick lib32readline-dev \
+            lib32z1-dev liblz4-tool libncurses5 libncursesw5-dev \
+            libssl-dev libxml2 libxml2-utils lzop pngcrush rsync \
+            schedtool squashfs-tools xsltproc zip zlib1g-dev python3
+      
+      - name: ⚡ Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: kernel-a52s-eur
+          max-size: 2G
+      
+      - name: 📦 Download Proton-Clang (Toolchain)
+        run: |
+          mkdir -p toolchain
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang
+      
+      - name: 📦 Download GCC Cross-Compilers
+        run: |
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git toolchain/gcc-64
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git toolchain/gcc-32
+      
+      - name: 🔨 Build Kernel
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export PATH=$PWD/toolchain/clang/bin:$PWD/toolchain/gcc-64/bin:$PWD/toolchain/gcc-32/bin:$PATH
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CC="ccache clang"
+          export KBUILD_BUILD_USER="your-github-username"
+          export KBUILD_BUILD_HOST="github-actions"
+          
+          # สร้าง .config จาก defconfig ที่คุณแก้ไว้
+          make O=out a52sxq_eur_open_defconfig
+          
+          # คอมไพล์ (ใช้ 4 cores)
+          make -j$(nproc --all) O=out \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            Image dtbs
+      
+      - name: 📦 Upload Kernel Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-image
+          path: out/arch/arm64/boot/Image
+      
+      - name: 📦 Upload DTBs
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-dtbs
+          path: out/arch/arm64/boot/dts/qcom/*.dtb
+      
+      - name: 🚀 Create Release (ถ้า push tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            out/arch/arm64/boot/Image
+            out/arch/arm64/boot/dts/qcom/*.dtb
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
