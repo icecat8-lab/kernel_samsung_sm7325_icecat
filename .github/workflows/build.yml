@@ -1,21 +1,41 @@
-name: Build Kernel 
+name: Build A52s Kernel (EUR)
 
 on:
-  push:
-    branches: [ main, master ]
-    tags: [ 'v*' ]  
-  workflow_dispatch: 
+  workflow_dispatch:  # กดปุ่มบิ้วเองเท่านั้น
+    inputs:
+      kernel_version:
+        description: 'เวอร์ชันเคอร์เนล (เช่น v1.0)'
+        required: false
+        default: 'dev'
+      build_type:
+        description: 'ประเภทการบิ้ว'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     
+    env:
+      # ตั้งค่าคอมไพล์หลัก
+      ARCH: arm64
+      SUBARCH: arm64
+      KBUILD_BUILD_USER: ${{ github.actor }}
+      KBUILD_BUILD_HOST: github-actions
+      DEFCONFIG: a52sxq_eur_open_defconfig
+      LOCALVERSION: -${{ github.event.inputs.kernel_version }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+
     steps:
       - name: 📥 Checkout Kernel Source
         uses: actions/checkout@v4
-      
-      - name: 🛠️ Install Dependencies
+
+      - name: 🛠️ ติดตั้ง Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -24,63 +44,101 @@ jobs:
             lib32z1-dev liblz4-tool libncurses5 libncursesw5-dev \
             libssl-dev libxml2 libxml2-utils lzop pngcrush rsync \
             schedtool squashfs-tools xsltproc zip zlib1g-dev python3
-      
-      - name: ⚡ Setup ccache
+
+      - name: ⚡ ตั้งค่า ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: kernel-a52s-eur
+          key: kernel-a52s-eur-${{ github.event.inputs.build_type }}
           max-size: 2G
-      
-      - name: 📦 Download Proton-Clang (Toolchain)
+          variant: ccache
+
+      - name: 📦 โหลด Proton-Clang (Toolchain หลัก)
         run: |
           mkdir -p toolchain
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang
-      
-      - name: 📦 Download GCC Cross-Compilers
+
+      - name: 📦 โหลด GCC Cross-Compilers
         run: |
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git toolchain/gcc-64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git toolchain/gcc-32
-      
-      - name: 🔨 Build Kernel
+
+      - name: 📝 สร้าง .config จาก Defconfig
         run: |
-          export ARCH=arm64
-          export SUBARCH=arm64
           export PATH=$PWD/toolchain/clang/bin:$PWD/toolchain/gcc-64/bin:$PWD/toolchain/gcc-32/bin:$PATH
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC="ccache clang"
-          export KBUILD_BUILD_USER="your-github-username"
-          export KBUILD_BUILD_HOST="github-actions"
+          export LOCALVERSION="${{ env.LOCALVERSION }}"
           
-          # สร้าง .config จาก defconfig ที่คุณแก้ไว้
-          make O=out a52sxq_eur_open_defconfig
+          make O=out $DEFCONFIG
+
+      - name: 🔨 เริ่มคอมไพล์เคอร์เนล
+        run: |
+          export PATH=$PWD/toolchain/clang/bin:$PWD/toolchain/gcc-64/bin:$PWD/toolchain/gcc-32/bin:$PATH
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CC="ccache clang"
+          export LOCALVERSION="${{ env.LOCALVERSION }}"
           
-          # คอมไพล์ (ใช้ 4 cores)
+          # คอมไพล์แบบ Parallel
           make -j$(nproc --all) O=out \
             LLVM=1 \
             LLVM_IAS=1 \
             Image dtbs
-      
-      - name: 📦 Upload Kernel Image
+
+      - name: 📱 แพ็ค AnyKernel3
+        run: |
+          # โหลด AnyKernel3
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
+          cd AnyKernel3
+          
+          # คัดลอกไฟล์เคอร์เนล
+          cp ../out/arch/arm64/boot/Image .
+          cp ../out/arch/arm64/boot/dts/qcom/*.dtb dtb/ 2>/dev/null || mkdir -p dtb && cp ../out/arch/arm64/boot/dts/qcom/*.dtb dtb/
+          
+          # แก้ anykernel.sh ให้ตรงกับรุ่น
+          sed -i 's/device.name.*/device.name.1=a52sxq;/' anykernel.sh
+          sed -i 's/block=\/dev\/block\/bootdevice\/by-name\/boot/block=\/dev\/block\/bootdevice\/by-name\/boot;/' anykernel.sh
+          
+          # สร้าง ZIP
+          zip -r9 "../A52s-Kernel-${{ github.event.inputs.kernel_version }}-${{ github.run_number }}.zip" * -x .git README.md
+          cd ..
+
+      - name: Image
         uses: actions/upload-artifact@v4
         with:
           name: kernel-image
           path: out/arch/arm64/boot/Image
-      
-      - name: 📦 Upload DTBs
+          retention-days: 30
+
+      - name:  DTBs
         uses: actions/upload-artifact@v4
         with:
           name: kernel-dtbs
           path: out/arch/arm64/boot/dts/qcom/*.dtb
-      
-      - name: 🚀 Create Release (ถ้า push tag)
-        if: startsWith(github.ref, 'refs/tags/')
+          retention-days: 30
+
+      - name: Flashable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: flashable-zip
+          path: A52s-Kernel-*.zip
+          retention-days: 30
+
+      - name: Release
+        if: github.event.inputs.kernel_version != 'dev' && github.event.inputs.build_type == 'release'
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ github.event.inputs.kernel_version }}
+          name: A52s Kernel ${{ github.event.inputs.kernel_version }}
           files: |
             out/arch/arm64/boot/Image
             out/arch/arm64/boot/dts/qcom/*.dtb
+            A52s-Kernel-*.zip
           generate_release_notes: true
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
