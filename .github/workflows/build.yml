@@ -1,10 +1,54 @@
 name: Build A52s Kernel (EUR - icecat)
 
 on:
-  workflow_dispatch: 
+  workflow_dispatch:
     inputs:
       kernel_version:
-        description: 'เวอร์ชันเค20G
+        description: 'ชื่อเวอร์ชัน'
+        required: true
+        default: 'icecat'
+      build_type:
+        description: 'ประเภทการบิ้ว'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    
+    env:
+      ARCH: arm64
+      SUBARCH: arm64
+      KBUILD_BUILD_USER: ${{ github.actor }}
+      KBUILD_BUILD_HOST: github-actions
+      DEFCONFIG: a52sxq_eur_open_defconfig
+      LOCALVERSION: ${{ github.event.inputs.kernel_version }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+
+    steps:
+      - name: 📥 Checkout Kernel Source
+        uses: actions/checkout@v4
+
+      - name: 🛠️ ติดตั้ง Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential ccache curl flex g++-multilib \
+            gcc-multilib git gnupg gperf imagemagick lib32readline-dev \
+            lib32z1-dev liblz4-tool libncurses5 libncursesw5-dev \
+            libssl-dev libxml2 libxml2-utils lzop pngcrush rsync \
+            schedtool squashfs-tools xsltproc zip zlib1g-dev python3
+
+      - name: ⚡ ตั้งค่า ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: kernel-a52s-eur-${{ github.event.inputs.build_type }}
+          max-size: 2G
           variant: ccache
 
       - name: 📦 โหลด Proton-Clang (Toolchain หลัก)
@@ -37,7 +81,7 @@ on:
           export CC="ccache clang"
           export LOCALVERSION="${{ env.LOCALVERSION }}"
           
-          # 1. คอมไพล์ Image, dtbs และ modules (เพิ่ม modules เข้ามา)
+          # 1. คอมไพล์ Image, dtbs และ modules
           make -j$(nproc --all) O=out \
             LLVM=1 \
             LLVM_IAS=1 \
