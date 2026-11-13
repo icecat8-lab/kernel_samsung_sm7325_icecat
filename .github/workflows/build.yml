@@ -20,7 +20,9 @@ jobs:
   compile-kernel:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
-    
+    permissions:
+      contents: write
+
     env:
       ARCH: arm64
       SUBARCH: arm64
@@ -66,7 +68,11 @@ jobs:
           export CC="ccache clang"
           
           # Note: LOCALVERSION is intentionally omitted here to respect the defconfig value (-icecat-qgki)
-          make O=out $DEFCONFIG
+          make O=out LLVM=1 LLVM_IAS=1 CC="ccache clang" $DEFCONFIG
+          make O=out LLVM=1 LLVM_IAS=1 CC="ccache clang" olddefconfig
+
+          # Sanity check: the config must have been generated with clang
+          grep -E "CC_IS_CLANG|CLANG_VERSION|LOCALVERSION=" out/.config || true
 
       - name: Execute Kernel Compilation Process
         run: |
@@ -79,12 +85,18 @@ jobs:
           make -j$(nproc --all) O=out \
             LLVM=1 \
             LLVM_IAS=1 \
+            CC="ccache clang" \
             Image dtbs modules
 
       - name: Install and Aggregate Kernel Modules
         run: |
+          export PATH=$PWD/toolchains/proton-clang/bin:$PWD/toolchains/gcc-64/bin:$PWD/toolchains/gcc-32/bin:$PATH
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+
           mkdir -p modules_out modules_flat
-          make O=out INSTALL_MOD_PATH=$PWD/modules_out modules_install
+          make O=out LLVM=1 LLVM_IAS=1 CC="ccache clang" INSTALL_MOD_PATH=$PWD/modules_out modules_install
           find modules_out -name "*.ko" -exec cp {} modules_flat/ \;
 
       - name: Package Boot Image via AnyKernel3
@@ -93,9 +105,8 @@ jobs:
           cd AnyKernel3
           
           # Configure AnyKernel3 for A52s (A-only device)
-          sed -i 's/module=.*;/module=1;/' anykernel.sh
-          sed -i 's/block=.*;/block=auto;/' anykernel.sh
-          sed -i 's/device.name.*/device.name.1=a52sxq;/' anykernel.sh
+          sed -i 's/^block=.*;/block=auto;/' anykernel.sh
+          sed -i -E 's/^device\.name1=.*/device.name1=a52sxq;/; s/^device\.name([2-5])=.*/device.name\1=;/' anykernel.sh
           
           # Copy Kernel Image
           cp ../out/arch/arm64/boot/Image .
