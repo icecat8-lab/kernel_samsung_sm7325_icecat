@@ -761,7 +761,7 @@ else ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 KBUILD_CFLAGS += -Os
 endif
 
-KBUILD_CFLAGS += -Wno-error=align-mismatch 
+KBUILD_CFLAGS += $(call cc-disable-warning,align-mismatch)
 
 # Tell gcc to never replace conditional load with a non-conditional one
 KBUILD_CFLAGS	+= $(call cc-option,--param=allow-store-data-races=0)
