@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       kernel_version:
-        description: 'ชื่อเวอร์ชัน'
+        description: 'Specify the kernel version tag (e.g., v1.0.0)'
         required: true
-        default: '1.0'
+        default: 'v1.0.0'
       build_type:
-        description: 'ประเภทการบิ้ว'
+        description: 'Select the compilation mode'
         required: true
         default: 'release'
         type: choice
@@ -17,7 +17,7 @@ on:
           - debug
 
 jobs:
-  build:
+  compile-kernel:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
     
@@ -26,15 +26,14 @@ jobs:
       SUBARCH: arm64
       KBUILD_BUILD_USER: ${{ github.actor }}
       KBUILD_BUILD_HOST: github-actions
-      DEFCONFIG: a52sxq_eur_open_defconfig
-      LOCALVERSION: ${{ github.event.inputs.kernel_version }}
+      DEFCONFIG: vendor/a52sxq_icecat_open_defconfig
       CCACHE_DIR: ${{ github.workspace }}/.ccache
 
     steps:
-      - name: 📥 Checkout Kernel Source
+      - name: Checkout Repository Source Code
         uses: actions/checkout@v4
 
-      - name: 🛠️ ติดตั้ง Dependencies
+      - name: Install Essential Build Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -44,111 +43,92 @@ jobs:
             libssl-dev libxml2 libxml2-utils lzop pngcrush rsync \
             schedtool squashfs-tools xsltproc zip zlib1g-dev python3
 
-      - name: ⚡ ตั้งค่า ccache
+      - name: Configure Compilation Cache (ccache)
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: kernel-a52s-eur-${{ github.event.inputs.build_type }}
+          key: kernel-a52s-${{ github.event.inputs.build_type }}
           max-size: 2G
           variant: ccache
 
-      - name: 📦 โหลด Proton-Clang (Toolchain หลัก)
+      - name: Download and Configure Toolchains
         run: |
-          mkdir -p toolchain
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchain/clang
+          mkdir -p toolchains
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchains/proton-clang
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git toolchains/gcc-64
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git toolchains/gcc-32
 
-      - name: 📦 โหลด GCC Cross-Compilers
+      - name: Generate Kernel Configuration (.config)
         run: |
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git toolchain/gcc-64
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git toolchain/gcc-32
-
-      - name: 📝 สร้าง .config จาก Defconfig
-        run: |
-          export PATH=$PWD/toolchain/clang/bin:$PWD/toolchain/gcc-64/bin:$PWD/toolchain/gcc-32/bin:$PATH
+          export PATH=$PWD/toolchains/proton-clang/bin:$PWD/toolchains/gcc-64/bin:$PWD/toolchains/gcc-32/bin:$PATH
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC="ccache clang"
-          export LOCALVERSION="${{ env.LOCALVERSION }}"
           
+          # Note: LOCALVERSION is intentionally omitted here to respect the defconfig value (-icecat-qgki)
           make O=out $DEFCONFIG
 
-      - name: 🔨 เริ่มคอมไพล์เคอร์เนล + Modules (สำคัญ!)
+      - name: Execute Kernel Compilation Process
         run: |
-          export PATH=$PWD/toolchain/clang/bin:$PWD/toolchain/gcc-64/bin:$PWD/toolchain/gcc-32/bin:$PATH
+          export PATH=$PWD/toolchains/proton-clang/bin:$PWD/toolchains/gcc-64/bin:$PWD/toolchains/gcc-32/bin:$PATH
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CC="ccache clang"
-          export LOCALVERSION="${{ env.LOCALVERSION }}"
           
-          # 1. คอมไพล์ Image, dtbs และ modules
           make -j$(nproc --all) O=out \
             LLVM=1 \
             LLVM_IAS=1 \
             Image dtbs modules
-          
-          # 2. รวบรวมไฟล์ .ko (Modules) ทั้งหมดมาไว้ที่โฟลเดอร์เดียวกัน
+
+      - name: Install and Aggregate Kernel Modules
+        run: |
           mkdir -p modules_out modules_flat
           make O=out INSTALL_MOD_PATH=$PWD/modules_out modules_install
           find modules_out -name "*.ko" -exec cp {} modules_flat/ \;
 
-      - name: 📱 แพ็ค AnyKernel3 (รวม Modules)
+      - name: Package Boot Image via AnyKernel3
         run: |
-          # โหลด AnyKernel3
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
           cd AnyKernel3
           
-          # เปิดใช้งานการแฟลช Modules ใน anykernel.sh
+          # Configure AnyKernel3 for A52s (A-only device)
           sed -i 's/module=.*;/module=1;/' anykernel.sh
-          # ใช้ block=auto เพื่อความปลอดภัยสูงสุดสำหรับเครื่อง A-only อย่าง A52s
           sed -i 's/block=.*;/block=auto;/' anykernel.sh
           sed -i 's/device.name.*/device.name.1=a52sxq;/' anykernel.sh
           
-          # คัดลอก Kernel Image
+          # Copy Kernel Image
           cp ../out/arch/arm64/boot/Image .
           
-          # คัดลอก DTBs (ถ้ามี)
+          # Copy Device Tree Blobs (if available)
           mkdir -p dtb
           cp ../out/arch/arm64/boot/dts/qcom/*.dtb dtb/ 2>/dev/null || true
           
-          # คัดลอก Modules (.ko) ทั้งหมด (หัวใจสำคัญที่ทำให้ Wi-Fi/ทัชสกรีนติด)
+          # Copy Kernel Modules (.ko)
           mkdir -p modules
           cp ../modules_flat/*.ko modules/ 2>/dev/null || echo "No modules found"
           
-          # สร้าง ZIP
-          zip -r9 "../A52s-Kernel-${{ github.event.inputs.kernel_version }}-${{ github.run_number }}.zip" * -x .git README.md *placeholder
+          # Create Flashable ZIP
+          zip -r9 "../Icecat-Kernel-${{ github.event.inputs.kernel_version }}.zip" * -x .git README.md *placeholder
           cd ..
 
-      - name: 📤 Upload Kernel Image
+      - name: Upload Compilation Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-image
-          path: out/arch/arm64/boot/Image
+          name: Icecat-Kernel-Artifacts
+          path: |
+            out/arch/arm64/boot/Image
+            modules_flat/*.ko
+            Icecat-Kernel-*.zip
           retention-days: 30
 
-      - name: 📤 Upload Kernel Modules (.ko)
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-modules
-          path: modules_flat/*.ko
-          retention-days: 30
-
-      - name: 📤 Upload Flashable ZIP
-        uses: actions/upload-artifact@v4
-        with:
-          name: flashable-zip
-          path: A52s-Kernel-*.zip
-          retention-days: 30
-
-      - name: 🚀 Create Release
-        if: github.event.inputs.kernel_version != 'dev' && github.event.inputs.build_type == 'release'
+      - name: Publish GitHub Release
+        if: github.event.inputs.build_type == 'release'
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.event.inputs.kernel_version }}
-          name: A52s Kernel ${{ github.event.inputs.kernel_version }}
-          files: |
-            out/arch/arm64/boot/Image
-            A52s-Kernel-*.zip
+          name: Icecat Kernel ${{ github.event.inputs.kernel_version }}
+          files: Icecat-Kernel-*.zip
           generate_release_notes: true
           draft: false
           prerelease: false
