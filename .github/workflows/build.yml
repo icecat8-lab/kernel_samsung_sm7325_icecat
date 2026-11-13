@@ -6,7 +6,7 @@ on:
       kernel_version:
         description: 'ชื่อเวอร์ชัน'
         required: true
-        default: 'icecat'
+        default: '1.0'
       build_type:
         description: 'ประเภทการบิ้ว'
         required: true
