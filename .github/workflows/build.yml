@@ -70,9 +70,10 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           export CLANG_TRIPLE=aarch64-linux-gnu-
+          export LOCALVERSION=
           export CC="ccache clang"
           
-          # Note: LOCALVERSION is intentionally omitted here to respect the defconfig value (-icecat-qgki)
+          # Note: LOCALVERSION is set empty on purpose so the kernel release comes only from CONFIG_LOCALVERSION (no "+" suffix)
           make O=out LLVM=1 LLVM_IAS=1 CC="ccache clang" $DEFCONFIG
           make O=out LLVM=1 LLVM_IAS=1 CC="ccache clang" olddefconfig
 
@@ -85,6 +86,7 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           export CLANG_TRIPLE=aarch64-linux-gnu-
+          export LOCALVERSION=
           export CC="ccache clang"
           
           make -j$(nproc --all) O=out \
@@ -93,16 +95,36 @@ jobs:
             CC="ccache clang" \
             Image dtbs modules
 
+          echo "kernel.release = $(cat out/include/config/kernel.release)"
+
       - name: Install and Aggregate Kernel Modules
         run: |
           export PATH=$PWD/toolchains/clang-11/bin:$PWD/toolchains/gcc-64/bin:$PWD/toolchains/gcc-32/bin:$PATH
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           export CLANG_TRIPLE=aarch64-linux-gnu-
+          export LOCALVERSION=
 
           mkdir -p modules_out modules_flat
           make O=out LLVM=1 LLVM_IAS=1 CC="ccache clang" INSTALL_MOD_PATH=$PWD/modules_out modules_install
           find modules_out -name "*.ko" -exec cp {} modules_flat/ \;
+
+      - name: Build Flashable boot.img (crDroid ramdisk)
+        run: |
+          BASE=base-images/crdroid-12.11
+          if [ ! -f "$BASE/header.bin" ]; then
+            echo "No $BASE/header.bin, skipping boot.img"
+            exit 0
+          fi
+          REL="$(cat out/include/config/kernel.release)"
+          WANT="$(cat $BASE/release.txt)"
+          echo "built kernel release : $REL"
+          echo "ROM kernel release   : $WANT"
+          if [ "$REL" != "$WANT" ]; then
+            echo "::warning::kernel release differs from the ROM's; modules in the ROM's vendor_boot will be rejected unless they are rebuilt and repacked"
+          fi
+          python3 tools/bootimg_v3.py pack --base "$BASE" \
+            --kernel out/arch/arm64/boot/Image --out boot.img --pad 100663296
 
       - name: Package Boot Image via AnyKernel3
         run: |
@@ -134,6 +156,7 @@ jobs:
           name: Icecat-Kernel-Artifacts
           path: |
             out/arch/arm64/boot/Image
+            boot.img
             modules_flat/*.ko
             Icecat-Kernel-*.zip
           retention-days: 30
