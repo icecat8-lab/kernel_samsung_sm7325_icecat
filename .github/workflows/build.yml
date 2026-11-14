@@ -130,22 +130,13 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git
           cd AnyKernel3
-          
-          # Configure AnyKernel3 for A52s (A-only device)
-          sed -i 's/^block=.*;/block=auto;/' anykernel.sh
-          sed -i -E 's/^device\.name1=.*/device.name1=a52sxq;/; s/^device\.name([2-5])=.*/device.name\1=;/' anykernel.sh
-          
-          # Copy Kernel Image
+
+          # Use our own anykernel.sh (kernel-only install, no sample ramdisk edits)
+          cp ../anykernel/anykernel.sh anykernel.sh
+
+          # Kernel only: dtb and modules stay as shipped by the ROM (vendor_boot and /vendor)
           cp ../out/arch/arm64/boot/Image .
-          
-          # Copy Device Tree Blobs (if available)
-          mkdir -p dtb
-          cp ../out/arch/arm64/boot/dts/qcom/*.dtb dtb/ 2>/dev/null || true
-          
-          # Copy Kernel Modules (.ko)
-          mkdir -p modules
-          cp ../modules_flat/*.ko modules/ 2>/dev/null || echo "No modules found"
-          
+
           # Create Flashable ZIP
           zip -r9 "../Icecat-Kernel-${{ github.event.inputs.kernel_version }}.zip" * -x .git README.md *placeholder
           cd ..
