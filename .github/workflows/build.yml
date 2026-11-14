@@ -55,13 +55,18 @@ jobs:
       - name: Download and Configure Toolchains
         run: |
           mkdir -p toolchains
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git toolchains/proton-clang
+          mkdir -p toolchains/clang-11
+          curl -fL --retry 3 --retry-delay 5 -o clang-11.tar.gz \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android11-qpr2-release/clang-r383902b1.tar.gz"
+          tar -xzf clang-11.tar.gz -C toolchains/clang-11
+          rm -f clang-11.tar.gz
+          toolchains/clang-11/bin/clang --version | head -n 1
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git toolchains/gcc-64
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git toolchains/gcc-32
 
       - name: Generate Kernel Configuration (.config)
         run: |
-          export PATH=$PWD/toolchains/proton-clang/bin:$PWD/toolchains/gcc-64/bin:$PWD/toolchains/gcc-32/bin:$PATH
+          export PATH=$PWD/toolchains/clang-11/bin:$PWD/toolchains/gcc-64/bin:$PWD/toolchains/gcc-32/bin:$PATH
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           export CLANG_TRIPLE=aarch64-linux-gnu-
@@ -76,7 +81,7 @@ jobs:
 
       - name: Execute Kernel Compilation Process
         run: |
-          export PATH=$PWD/toolchains/proton-clang/bin:$PWD/toolchains/gcc-64/bin:$PWD/toolchains/gcc-32/bin:$PATH
+          export PATH=$PWD/toolchains/clang-11/bin:$PWD/toolchains/gcc-64/bin:$PWD/toolchains/gcc-32/bin:$PATH
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           export CLANG_TRIPLE=aarch64-linux-gnu-
@@ -90,7 +95,7 @@ jobs:
 
       - name: Install and Aggregate Kernel Modules
         run: |
-          export PATH=$PWD/toolchains/proton-clang/bin:$PWD/toolchains/gcc-64/bin:$PWD/toolchains/gcc-32/bin:$PATH
+          export PATH=$PWD/toolchains/clang-11/bin:$PWD/toolchains/gcc-64/bin:$PWD/toolchains/gcc-32/bin:$PATH
           export CROSS_COMPILE=aarch64-linux-android-
           export CROSS_COMPILE_ARM32=arm-linux-androideabi-
           export CLANG_TRIPLE=aarch64-linux-gnu-
